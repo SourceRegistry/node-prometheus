@@ -1,0 +1,20 @@
+{
+  "name": "prometheus",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "dev": "tsx tests/http.ts",
+    "build": "tsc --build",
+    "test": "echo \"Error: no test specified\" && exit 0",
+    "test:http": "tsx tests/http.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.25",
+    "tsx": "^4.7.1",
+    "typescript": "^5.4.2"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
