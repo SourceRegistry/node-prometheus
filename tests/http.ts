@@ -37,10 +37,9 @@ setInterval(() => {
     // summary.push(Math.random())
 }, 2000)
 
-createServer(async (_, res) => {
-    console.log('Scraped')
+createServer(async (req, res) => {
     res.writeHead(200, {"Content-Type": "text/plain"})
+    hits++;
     res.write(await Metric.Concat(gauge, histogram, counter, untyped));
     res.end();
-    hits++;
-}).listen(8080, () => console.log("http://localhost:8080")); //the server object listens on port 8080
+}).listen(8080, '0.0.0.0',() => console.log("http://0.0.0.0:8080")); //the server object listens on port 8080

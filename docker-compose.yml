@@ -1,0 +1,26 @@
+services:
+  prometheus:
+    image: prom/prometheus
+    volumes:
+      - "./res/config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml"
+    networks:
+      - localprom
+      - back-end
+    ports:
+      - 9090:9090
+  alertmanager:
+    image: prom/alertmanager
+    ports:
+      - 9093:9093
+    volumes:
+      - ./res/config/alertmanager/:/etc/alertmanager/
+    networks:
+      - back-end
+    command:
+      - '--config.file=/etc/alertmanager/config.yml'
+      - '--storage.path=/alertmanager'
+networks:
+  back-end:
+  localprom:
+    driver: bridge
+
