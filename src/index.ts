@@ -1,142 +1,343 @@
+/**
+ * Supported Prometheus metric types.
+ */
 export type MetricType = 'counter' | 'gauge' | 'histogram' | 'summary' | 'untyped';
 
-export class Metric<T extends MetricType> {
+/**
+ * Represents a value that may be synchronous or asynchronous.
+ */
+export type MaybePromise<T> = Promise<T> | T;
 
-    private readonly _type: T;
-    private readonly _name: string;
-    private readonly _description: string;
-    private readonly _labels: Record<string, string>;
+/**
+ * Input formats accepted by value reader functions.
+ */
+type ValueReaderResult =
+    | number
+    | [number, number] // [value, timestamp]
+    | [number, Record<string, string>] // [value, labels]
+    | [number, Record<string, string>, number]; // [value, labels, timestamp]
 
-    get labels(): Record<string, string> {
-        return this._labels;
+/**
+ * Internal normalized representation of a metric value with labels and timestamp.
+ */
+type NormalizedValue = [value: number, labels: Record<string, string>, timestamp: number];
+
+/**
+ * Base class for all Prometheus metrics.
+ * Handles common functionality like HELP/TYPE comments and label formatting.
+ *
+ * @template T - The metric type (e.g., 'gauge', 'counter').
+ */
+export abstract class Metric<T extends MetricType> {
+    /**
+     * The sanitized metric name.
+     */
+    public readonly name: string;
+
+    /**
+     * Optional metric description (used in # HELP).
+     */
+    public readonly description?: string;
+
+    /**
+     * Default labels applied to all samples of this metric.
+     */
+    public readonly labels?: Record<string, string>;
+
+    /**
+     * Creates a new Metric instance.
+     *
+     * @param type - The Prometheus metric type.
+     * @param name - The raw metric name (will be cleaned).
+     * @param description - Optional description for # HELP.
+     * @param labels - Optional default labels.
+     */
+    protected constructor(
+        public readonly type: T,
+        name?: string,
+        description?: string,
+        labels?: Record<string, string>
+    ) {
+        this.name = Metric.cleanText(name) || '';
+        this.description = description;
+        this.labels = labels;
     }
 
-    get name() {
-        return this._name;
-    }
-
-    get description() {
-        return this._description;
-    }
-
-    get type(): T {
-        return this._type;
-    }
-
-    constructor(type: T, name?: string, description?: string, labels?: Record<string, string>) {
-        this._type = type;
-        this._name = Metric.CleanText(name);
-        this._description = description;
-        this._labels = labels;
-    }
-
-    static LabelString(labels?: Record<string, string>) {
+    /**
+     * Converts a label object to a Prometheus label string (e.g., `{foo="bar"}`).
+     *
+     * @param labels - The label key-value pairs.
+     * @returns The formatted label string.
+     */
+    static labelString(labels?: Record<string, string | number>): string {
         if (!labels || Object.keys(labels).length === 0) return '';
-        return `{${Object.entries(labels).map(([key, value]) => `${key}="${value?.toString()}"`).join(',')}}`;
+        return `{${Object.entries(labels)
+            .map(([key, value]) => `${key}="${String(value)}"`)
+            .join(',')}}`;
     }
 
-    static CleanText(input: string) {
-        return input.replaceAll("-", "").replaceAll("/", "_").replaceAll(" ", "_").replaceAll("(", "").replaceAll(")", "");
+    /**
+     * Sanitizes a metric name by removing or replacing invalid characters.
+     *
+     * Prometheus metric names must match [a-zA-Z_:][a-zA-Z0-9_:]*
+     * This removes hyphens, parens; replaces slashes and spaces with underscores.
+     *
+     * @param input - The raw metric name.
+     * @returns The cleaned metric name.
+     */
+    static cleanText(input?: string): string | undefined {
+        return input
+            ?.replaceAll('-', '')
+            .replaceAll('/', '_')
+            .replaceAll(' ', '_')
+            .replaceAll('(', '')
+            .replaceAll(')', '');
     }
 
-    static Concat(...metrics: Metric<MetricType>[]) {
-        return Promise.all(metrics.map((m) => m.stringify())).then((r) => r.join("\n"))
+    /**
+     * Concatenates multiple metrics into a single exposition string.
+     *
+     * @param metrics - The metrics to serialize.
+     * @returns A Promise resolving to the combined string.
+     */
+    static async concat(...metrics: Metric<MetricType>[]): Promise<string> {
+        const results = await Promise.all(metrics.map((m) => m.stringify()));
+        return results.join('\n');
     }
 
-    async stringify() {
-        let ret = ''
+
+    /**
+     * Generates the common header lines (# HELP, # TYPE) for this metric.
+     * Called by subclasses before serializing their specific values.
+     *
+     * @returns The header string.
+     */
+    protected generateHeader(): string {
+        let ret = '';
         if (this.name && this.description) {
             ret += `# HELP ${this.name} ${this.description}\n`;
         }
         if (this.type !== 'untyped') {
-            ret += `# TYPE ${this.name} ${this.type}\n`
+            ret += `# TYPE ${this.name} ${this.type}\n`;
         }
         return ret;
     }
 
+    /**
+     * Serializes the metric to Prometheus exposition format.
+     *
+     * @returns A Promise resolving to the serialized string.
+     */
+    abstract stringify(): Promise<string>;
 }
 
-export type MaybePromise<T> = Promise<T> | T
+/**
+ * Base class for metrics that read values asynchronously (Counter, Gauge).
+ *
+ * @template T - The metric type ('counter' or 'gauge').
+ */
+abstract class ValueMetric<T extends 'counter' | 'gauge'> extends Metric<T> {
+    private readonly _reader: () => Promise<NormalizedValue[]>;
 
-export class Gauge extends Metric<'gauge'> {
-
-    private readonly _reader: () => MaybePromise<[number, Record<string, string>, number][]>;
-
-    get values() {
-        return this._reader();
-    }
-
-    constructor(config: {
-        name: string,
-        description?: string,
-        labels?: Record<string, string>,
-        reader: () => MaybePromise<(number | [number, number] | [number, Record<string, string>, number] | [number, Record<string, string>])[]>
-    }) {
-        super('gauge', config.name, config.description);
-        this._reader = async (): Promise<[number, Record<string, string>, number][]> => {
-            const ret = await config.reader();
-            const values: [number, Record<string, string>, number][] = []
-            for (let value of ret) {
-                if (typeof value === "number") {
-                    value = [value, {}, Date.now()]
-                } else if (Array.isArray(value) && value.length === 2) {
-                    if (typeof value[1] === "number") {
-                        value = [value[0], {}, value[1]]
+    /**
+     * Creates a new ValueMetric.
+     *
+     * @param type - The metric type.
+     * @param config - Configuration object.
+     * @param config.name - Metric name.
+     * @param config.description - Optional description.
+     * @param config.labels - Optional default labels.
+     * @param config.reader - Async or sync function returning values.
+     */
+    protected constructor(
+        type: T,
+        config: {
+            name: string;
+            description?: string;
+            labels?: Record<string, string>;
+            reader: () => MaybePromise<ValueReaderResult[]>;
+        }
+    ) {
+        super(type, config.name, config.description, config.labels);
+        this._reader = async (): Promise<NormalizedValue[]> => {
+            const results = await config.reader();
+            return results.map((value): NormalizedValue => {
+                if (typeof value === 'number') {
+                    return [value, {}, Date.now()];
+                } else if (Array.isArray(value)) {
+                    if (value.length === 2) {
+                        if (typeof value[1] === 'number') {
+                            return [value[0], {}, value[1]];
+                        } else {
+                            return [value[0], value[1], Date.now()];
+                        }
                     } else {
-                        value = [value[0], value[1], Date.now()];
+                        return value as NormalizedValue; // length 3
                     }
                 }
-                values.push(value as [number, Record<string, string>, number]);
-            }
-            return values;
-        }
-    }
-
-    private async valueString() {
-        let _values: [number, Record<string, string>, number][];
-        const values = this._reader();
-        if (values instanceof Promise) {
-            _values = await values;
-        }
-        return _values.map((value) => `${this.name}${Metric.LabelString(Object.assign({}, value[1], super.labels))} ${value[0].toString()} ${value[2].toString()}\n`).join('');
-    }
-
-    async stringify() {
-        return (
-            await super.stringify() +
-            await this.valueString() + "\n"
-        )
-    }
-
-}
-
-export class Histogram extends Metric<'histogram'> {
-    private readonly _buckets: number[];
-    private _bucketCounts: { [key: number]: number } = {};
-    private _sum: number = 0;
-    private _count: number = 0;
-
-    constructor(config: {
-        name: string,
-        description?: string,
-        buckets?: number[],
-        labels?: Record<string, string>,
-    }) {
-        super('histogram', config.name, config.description);
-        this._buckets = config.buckets ?? []
-        this._buckets = this._buckets.sort((a, b) => a - b);
-        this._buckets.push(Infinity);  // Always add a bucket for +Inf
-        this._buckets.forEach(bucket => this._bucketCounts[bucket] = 0  /*Initialize counts for each bucket*/);
+                throw new Error(`Unexpected value format: ${JSON.stringify(value)}`);
+            });
+        };
     }
 
     /**
-     * Update the histogram with a new value.
-     * This increments the bucket counts, sum, and total count.
+     * Serializes the current values with labels and timestamps.
+     *
+     * @returns Promise resolving to value lines.
      */
-    push(value: number) {
+    protected async valueString(): Promise<string> {
+        const values = await this._reader();
+        return values
+            .map(
+                ([val, valLabels, ts]) =>
+                    `${this.name}${Metric.labelString({ ...this.labels, ...valLabels })} ${val} ${ts}\n`
+            )
+            .join('');
+    }
+
+    /**
+     * @inheritdoc
+     */
+    async stringify(): Promise<string> {
+        return `${super.generateHeader()}${await this.valueString()}\n`;
+    }
+}
+
+/**
+ * A Prometheus Gauge metric.
+ * Represents a single numerical value that can arbitrarily go up and down.
+ *
+ * @example
+ * const gauge = new Gauge({
+ *   name: "temperature_celsius",
+ *   description: "Current temperature in Celsius",
+ *   reader: () => [23.5]
+ * });
+ */
+export class Gauge extends ValueMetric<'gauge'> {
+    /**
+     * Creates a new Gauge.
+     *
+     * @param config - Configuration object.
+     */
+    constructor(config: {
+        name: string;
+        description?: string;
+        labels?: Record<string, string>;
+        reader: () => MaybePromise<ValueReaderResult[]>;
+    }) {
+        super('gauge', config);
+    }
+}
+
+/**
+ * A Prometheus Counter metric.
+ * Represents a cumulative metric that only increases.
+ *
+ * @example
+ * const counter = new Counter({
+ *   name: "http_requests_total",
+ *   description: "Total HTTP requests",
+ *   reader: () => [1234]
+ * });
+ */
+export class Counter extends ValueMetric<'counter'> {
+    /**
+     * Creates a new Counter.
+     *
+     * @param config - Configuration object.
+     */
+    constructor(config: {
+        name: string;
+        description?: string;
+        labels?: Record<string, string>;
+        reader: () => MaybePromise<ValueReaderResult[]>;
+    }) {
+        super('counter', config);
+    }
+
+    /**
+     * Increments the counter by a given value (convenience alias).
+     * Note: Since Counter uses a reader, this is just documentation — actual increment
+     * must be handled in the reader function or external state.
+     *
+     * @param delta - Amount to increment by (default: 1).
+     */
+    inc(delta: number = 1): void {
+        console.warn(
+            `Counter.inc() called, but Counter uses reader function. Increment must be handled externally. Delta: ${delta}`
+        );
+    }
+}
+
+/**
+ * A Prometheus Histogram metric.
+ * Counts observations in configurable buckets and provides sum + count.
+ *
+ * @example
+ * const hist = new Histogram({
+ *   name: "response_time_seconds",
+ *   description: "Response time in seconds",
+ *   buckets: [0.1, 0.5, 1, 2, 5]
+ * });
+ * hist.observe(0.75);
+ */
+export class Histogram extends Metric<'histogram'> {
+    private readonly _buckets: readonly number[];
+    private _bucketCounts: Record<number, number> = {};
+    private _sum: number = 0;
+    private _count: number = 0;
+
+    /**
+     * Creates a new Histogram.
+     *
+     * @param config - Configuration object.
+     * @param config.name - Metric name.
+     * @param config.description - Optional description.
+     * @param config.buckets - Optional bucket thresholds (default: []). +Inf always added.
+     * @param config.labels - Optional default labels.
+     */
+    constructor(config: {
+        name: string;
+        description?: string;
+        buckets?: number[];
+        labels?: Record<string, string>;
+    }) {
+        super('histogram', config.name, config.description, config.labels);
+        const buckets = (config.buckets ?? []).sort((a, b) => a - b);
+        this._buckets = [...buckets, Infinity]; // Always include +Inf
+        this.reset(); // Initialize counts
+    }
+
+    /**
+     * Resets all bucket counts, sum, and total count to zero.
+     */
+    reset(): void {
+        this._buckets.forEach((bucket) => (this._bucketCounts[bucket] = 0));
+        this._sum = 0;
+        this._count = 0;
+    }
+
+    /**
+     * Observes a value, updating buckets, sum, and count.
+     *
+     * @param value - The observed value.
+     */
+    observe(value: number): void {
+        if (typeof value !== 'number' || isNaN(value)) {
+            throw new Error(`Invalid histogram value: ${value}`);
+        }
+        this.push(value);
+    }
+
+    /**
+     * Alias for observe().
+     *
+     * @param value - The observed value.
+     */
+    push(value: number): void {
         this._sum += value;
         this._count++;
-        // Update the bucket counts
         for (const bucket of this._buckets) {
             if (value <= bucket) {
                 this._bucketCounts[bucket]++;
@@ -144,174 +345,196 @@ export class Histogram extends Metric<'histogram'> {
         }
     }
 
-    reset(): void {
-        this._buckets.forEach(bucket => this._bucketCounts[bucket] = 0  /*Initialize counts for each bucket*/);
+    /**
+     * Serializes bucket, sum, and count lines.
+     *
+     * @returns The serialized string.
+     */
+    private bucketString(): string {
+        const bucketStrings = this._buckets
+            .map((bucket) => {
+                const le = bucket === Infinity ? '+Inf' : bucket;
+                return `${this.name}_bucket${Metric.labelString({ ...this.labels, le })} ${
+                    this._bucketCounts[bucket]
+                }`;
+            })
+            .join('\n');
+
+        return `${bucketStrings}\n${this.name}_sum ${this._sum}\n${this.name}_count ${this._count}`;
     }
 
     /**
-     * Generate the string for the histogram's buckets, sum, and count.
+     * @inheritdoc
      */
-    private bucketString() {
-        const bucketStrings = Object.entries(this._bucketCounts)
-            .map(([bucket, count]) => `${this.name}_bucket${Metric.LabelString(Object.assign({le: bucket === 'Infinity' ? '+Inf' : bucket}, super.labels))} ${count}`)
-            .join('\n');
-        const sumString = `${this.name}_sum ${this._sum}`;
-        const countString = `${this.name}_count ${this._count}`;
-        return `${bucketStrings}\n${sumString}\n${countString}`;
-    }
-
-    async stringify() {
-        return (
-            await super.stringify() +
-            this.bucketString() + "\n"
-        );
+    async stringify(): Promise<string> {
+        return `${super.generateHeader()}${this.bucketString()}\n`;
     }
 }
 
+/**
+ * A Prometheus Summary metric.
+ * Tracks φ-quantiles, sum, and count. Quantiles are calculated via user-provided function.
+ *
+ * @example
+ * const summary = new Summary({
+ *   name: "request_duration_seconds",
+ *   description: "Request duration in seconds",
+ *   quantiles: [0.5, 0.9, 0.99],
+ *   calculate: (value, quantile) => value * quantile // dummy algorithm
+ * });
+ * summary.observe(0.8);
+ */
 export class Summary extends Metric<'summary'> {
-
-    static Calculation = {
-        random(value: number, quantile: number): number {
-            if (Math.random() <= quantile) {
-                return quantile;
-            }
-        }
-    }
-
-    private _quantiles: Map<number, number> = new Map();
+    private _quantiles: Map<number, number>; // quantile => estimated value
     private _sum: number = 0;
     private _count: number = 0;
-    private _calculate: any;
+    private readonly _calculate: (value: number, quantile: number) => number;
 
+    /**
+     * Creates a new Summary.
+     *
+     * @param config - Configuration object.
+     * @param config.name - Metric name.
+     * @param config.description - Optional description.
+     * @param config.quantiles - Array of φ-quantiles (0 < φ < 1).
+     * @param config.calculate - Function to calculate quantile estimate given value and φ.
+     */
     constructor(config: {
-        name: string,
-        description?: string,
-        quantiles: number[],
-        calculate: (value: number, quantile: number) => keyof typeof config['quantiles'],
+        name: string;
+        description?: string;
+        quantiles: readonly number[];
+        calculate: (value: number, quantile: number) => number;
     }) {
         super('summary', config.name, config.description);
-        // Initialize quantiles with their initial values
-        config.quantiles.forEach(q => this._quantiles.set(q, 0));
+        if (!config.quantiles.length) {
+            throw new Error('Summary must have at least one quantile');
+        }
+        // Initialize quantiles with 0
+        this._quantiles = new Map(config.quantiles.map((q) => [q, 0]));
         this._calculate = config.calculate;
     }
 
     /**
-     * Update the summary with a new value.
-     * This will update the sum, count, and approximate quantiles.
+     * Observes a value, updating quantiles, sum, and count.
+     *
+     * @param value - The observed value.
      */
-    push(value: number) {
-        this._sum += value;
-        this._count++;
-        this._quantiles.forEach(q => {
-            this._quantiles.set(this._calculate(q, value), value)
-        })
+    observe(value: number): void {
+        if (typeof value !== 'number' || isNaN(value)) {
+            throw new Error(`Invalid summary value: ${value}`);
+        }
+        this.push(value);
     }
 
     /**
-     * Generate the string for the summary's quantiles, sum, and count.
+     * Alias for observe().
+     *
+     * @param value - The observed value.
      */
-    private summaryString() {
-        const quantileStrings = [...this._quantiles.entries()].sort(([a], [b]) => a - b)
-            .map(([q, value]) => `${this.name}${Metric.LabelString(Object.assign({quantile: q}, super.labels))} ${value}`)
+    push(value: number): void {
+        this._sum += value;
+        this._count++;
+
+        // Update each quantile estimate using the provided algorithm
+        this._quantiles.forEach((_, quantile) => {
+            const newValue = this._calculate(value, quantile);
+            this._quantiles.set(quantile, newValue);
+        });
+    }
+
+    /**
+     * Serializes quantile, sum, and count lines.
+     *
+     * @returns The serialized string.
+     */
+    private summaryString(): string {
+        const quantileStrings = [...this._quantiles.entries()]
+            .sort(([a], [b]) => a - b)
+            .map(
+                ([q, value]) =>
+                    `${this.name}${Metric.labelString({ ...this.labels, quantile: q })} ${value}`
+            )
             .join('\n');
 
-        const sumString = `${this.name}_sum ${this._sum}`;
-        const countString = `${this.name}_count ${this._count}`;
-
-        return `${quantileStrings}\n${sumString}\n${countString}`;
+        return `${quantileStrings}\n${this.name}_sum ${this._sum}\n${this.name}_count ${this._count}`;
     }
 
-    async stringify() {
-        return (
-            await super.stringify() +
-            this.summaryString() + "\n"
-        );
+    /**
+     * @inheritdoc
+     */
+    async stringify(): Promise<string> {
+        return `${super.generateHeader()}${this.summaryString()}\n`;
     }
 }
 
-export class Counter extends Metric<'counter'> {
-
-    private readonly _reader: () => MaybePromise<[number, Record<string, string>, number][]>;
-
-    get values() {
-        return this._reader();
-    }
-
-    constructor(config: {
-        name: string,
-        description?: string,
-        labels?: Record<string, string>,
-        reader: () => MaybePromise<(number | [number, number] | [number, Record<string, string>, number] | [number, Record<string, string>])[]>
-    }) {
-        super('counter', config.name, config.description);
-        this._reader = async (): Promise<[number, Record<string, string>, number][]> => {
-            const ret = await config.reader();
-            const values: [number, Record<string, string>, number][] = []
-            for (let value of ret) {
-                if (typeof value === "number") {
-                    value = [value, {}, Date.now()]
-                } else if (Array.isArray(value) && value.length === 2) {
-                    if (typeof value[1] === "number") {
-                        value = [value[0], {}, value[1]]
-                    } else {
-                        value = [value[0], value[1], Date.now()];
-                    }
-                }
-                values.push(value as [number, Record<string, string>, number]);
-            }
-            return values;
-        }
-    }
-
-    private async counterString() {
-        let _values: [number, Record<string, string>, number][];
-        const values = this._reader();
-        if (values instanceof Promise) {
-            _values = await values;
-        }
-        return _values.map((value) => `${this.name}${Metric.LabelString(Object.assign({}, value[1], super.labels))} ${value[0].toString()} ${value[2].toString()}\n`).join('');
-    }
-
-    async stringify() {
-        return (
-            await super.stringify() +
-            await this.counterString() + "\n"
-        )
-    }
-}
-
+/**
+ * A Prometheus Untyped metric.
+ * Used when metric type is unknown. Behaves like a Gauge.
+ *
+ * @example
+ * const metric = new Untyped({
+ *   name: "some_unknown_metric",
+ *   value: 42
+ * });
+ * metric.set(43);
+ */
 export class Untyped extends Metric<'untyped'> {
-    private _value: [number, number];
+    private _value: [number, number]; // [value, timestamp]
 
+    /**
+     * Creates a new Untyped metric.
+     *
+     * @param config - Configuration object.
+     * @param config.name - Metric name.
+     * @param config.description - Optional description.
+     * @param config.labels - Optional default labels.
+     * @param config.value - Initial value or [value, timestamp] tuple.
+     */
     constructor(config: {
-        name: string,
-        description?: string,
-        labels?: Record<string, string>,
-        value?: [number, number] | number
+        name: string;
+        description?: string;
+        labels?: Record<string, string>;
+        value?: number | [number, number];
     }) {
-        super('untyped', config.name, config.description);
-        this._value = Array.isArray(config.value) ? config.value : [0, Date.now()];
+        super('untyped', config.name, config.description, config.labels);
+        this._value = Array.isArray(config.value)
+            ? config.value
+            : [config.value ?? 0, Date.now()];
     }
 
-    set(value: number | [number, number]) {
+    /**
+     * Sets the current value and timestamp.
+     *
+     * @param value - New value or [value, timestamp] tuple.
+     */
+    set(value: number | [number, number]): void {
         this._value = Array.isArray(value) ? value : [value, Date.now()];
     }
 
-    get() {
+    /**
+     * Gets the current value and timestamp.
+     *
+     * @returns [value, timestamp] tuple.
+     */
+    get(): [number, number] {
         return this._value;
     }
 
-
-    private async valueString() {
-        return `${this.name}${Metric.LabelString(super.labels)} ${this._value[0].toString()} ${this._value[1].toString()}\n`;
+    /**
+     * Serializes the current value.
+     *
+     * @returns The serialized string.
+     */
+    private valueString(): string {
+        return `${this.name}${Metric.labelString(this.labels)} ${this._value[0]} ${
+            this._value[1]
+        }\n`;
     }
 
-    async stringify() {
-        return (
-            await super.stringify() +
-            await this.valueString() + "\n"
-        )
+    /**
+     * @inheritdoc
+     */
+    async stringify(): Promise<string> {
+        return `${super.generateHeader()}${this.valueString()}\n`;
     }
-
-
 }

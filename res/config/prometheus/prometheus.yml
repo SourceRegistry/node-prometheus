@@ -8,7 +8,7 @@ scrape_configs:
   - job_name: node-prometheus
     static_configs:
       - targets:
-          -  145.137.48.243:8080
+          -  localhost:8080
 
 # alert
 alerting:

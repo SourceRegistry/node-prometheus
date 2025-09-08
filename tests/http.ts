@@ -38,8 +38,9 @@ setInterval(() => {
 }, 2000)
 
 createServer(async (req, res) => {
+    console.log("Scraped")
     res.writeHead(200, {"Content-Type": "text/plain"})
     hits++;
-    res.write(await Metric.Concat(gauge, histogram, counter, untyped));
+    res.write(await Metric.concat(gauge, histogram, counter, untyped));
     res.end();
 }).listen(8080, '0.0.0.0',() => console.log("http://0.0.0.0:8080")); //the server object listens on port 8080

@@ -3,9 +3,7 @@ services:
     image: prom/prometheus
     volumes:
       - "./res/config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml"
-    networks:
-      - localprom
-      - back-end
+    network_mode: host
     ports:
       - 9090:9090
   alertmanager:
