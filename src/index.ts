@@ -97,12 +97,22 @@ export abstract class Metric<T extends MetricType> {
     /**
      * Concatenates multiple metrics into a single exposition string.
      *
+     * @param format - used to set the metric type
      * @param metrics - The metrics to serialize.
      * @returns A Promise resolving to the combined string.
      */
-    static async concat(...metrics: Metric<MetricType>[]): Promise<string> {
+    static async concat(
+        format: 'prometheus' | 'openmetrics' = 'prometheus',
+        ...metrics: Metric<MetricType>[]
+    ): Promise<string> {
         const results = await Promise.all(metrics.map((m) => m.stringify()));
-        return results.join('\n');
+        let output = results.join('\n');
+
+        if (format === 'openmetrics') {
+            output = output.trimEnd() + '\n# EOF'; // Ensure no trailing newline before # EOF
+        }
+
+        return output;
     }
 
 

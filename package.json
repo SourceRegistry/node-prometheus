@@ -1,7 +1,7 @@
 {
   "name": "@sourceregistry/node-prometheus",
   "version": "1.0.0",
-  "description": "A lightweight, zero-dependency TypeScript library for creating and exposing Prometheus metrics in standard exposition format.",
+  "description": "A lightweight, zero-dependency TypeScript library for creating and exposing Prometheus metrics in standard exposition and OpenMetrics format.",
   "main": "./dist/index.es.js",
   "module": "./dist/index.es.js",
   "types": "./dist/index.d.ts",
@@ -36,7 +36,8 @@
     "histogram",
     "summary",
     "typescript",
-    "observability"
+    "observability",
+    "openmetrics"
   ],
   "author": "A.P.A. Slaa (a.p.a.slaa@projectsource.nl)",
   "license": "Apache-2.0",

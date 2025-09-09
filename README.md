@@ -155,9 +155,13 @@ No tests included — consider adding Jest/Mocha tests for:
 
 ---
 
+## 👾 Examples
+
+Look at the examples folder in this repository.
+
 ## 📜 License
 
-MIT — Feel free to use, modify, and distribute.
+Apache 2.0
 
 ---
 
