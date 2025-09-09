@@ -1,3 +1,10 @@
+## [1.0.2](https://github.com/SourceRegistry/node-prometheus/compare/v1.0.1...v1.0.2) (2025-09-09)
+
+
+### Bug Fixes
+
+* README.md ([a348bff](https://github.com/SourceRegistry/node-prometheus/commit/a348bff0037ec50a8edfe82e764ccd5d851e44a6))
+
 ## [1.0.1](https://github.com/SourceRegistry/node-prometheus/compare/v1.0.0...v1.0.1) (2025-09-09)
 
 

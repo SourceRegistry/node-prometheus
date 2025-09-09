@@ -1,6 +1,6 @@
 {
   "name": "@sourceregistry/node-prometheus",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "A lightweight, zero-dependency TypeScript library for creating and exposing Prometheus metrics in standard exposition and OpenMetrics format.",
   "main": "./dist/index.es.js",
   "module": "./dist/index.es.js",
