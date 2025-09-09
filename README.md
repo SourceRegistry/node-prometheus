@@ -334,7 +334,3 @@ PRs welcome! Please ensure:
 ---
 
 > 💡 **Note**: This library generates exposition format only. You must expose it via HTTP (e.g., Express, Fastify, or plain `http`) for Prometheus to scrape. See the HTTP example above to get started quickly.
-
----
-
-✅ You’re now ready to monitor everything in TypeScript — Prometheus and OpenMetrics compliant out of the box.
