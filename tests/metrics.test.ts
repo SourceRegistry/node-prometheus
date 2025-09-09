@@ -29,7 +29,7 @@ describe('Metric Utilities', () => {
         expect(Metric.labelString(undefined)).toBe('');
     });
 
-    it('concat combines multiple metrics', async () => {
+    it('concat combines multiple metrics (prometheus output)', async () => {
         const counter = new Counter({
             name: 'test_counter',
             reader: () => [10],
@@ -40,11 +40,30 @@ describe('Metric Utilities', () => {
             reader: () => [3.14],
         });
 
-        const output = await Metric.concat(counter, gauge);
+        const output = await Metric.concat('prometheus',counter, gauge);
         expect(output).toContain('# TYPE test_counter counter');
         expect(output).toContain('test_counter 10');
         expect(output).toContain('# TYPE test_gauge gauge');
         expect(output).toContain('test_gauge 3.14');
+    });
+
+    it('concat combines multiple metrics (openmetrics output)', async () => {
+        const counter = new Counter({
+            name: 'test_counter',
+            reader: () => [10],
+        });
+
+        const gauge = new Gauge({
+            name: 'test_gauge',
+            reader: () => [3.14],
+        });
+
+        const output = await Metric.concat('openmetrics',counter, gauge);
+        expect(output).toContain('# TYPE test_counter counter');
+        expect(output).toContain('test_counter 10');
+        expect(output).toContain('# TYPE test_gauge gauge');
+        expect(output).toContain('test_gauge 3.14');
+        expect(output).toContain('# EOF');
     });
 });
 
