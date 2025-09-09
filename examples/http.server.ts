@@ -13,18 +13,11 @@ const histogram = new Histogram({
     buckets: [.5, .4, .1, .2]
 })
 
-// const summary = new Summary({
-//     name: "test 3",
-//     description: "test of summery component",
-//     quantiles: [.5, .9, 0.99],
-//     calculate: Summary.Calculation.random
-// })
-
 let hits = 0;
 
 const counter = new Counter({
     name: "test 4", reader: () => [
-        [hits, {method: "GET", action: "Read metrics"}]
+        [hits, {method: "GET", action: "Read metrics"}],
     ]
 })
 
@@ -43,4 +36,4 @@ createServer(async (req, res) => {
     hits++;
     res.write(await Metric.concat(gauge, histogram, counter, untyped));
     res.end();
-}).listen(8080, '0.0.0.0',() => console.log("http://0.0.0.0:8080")); //the server object listens on port 8080
+}).listen(8080, '0.0.0.0', () => console.log("http://0.0.0.0:8080")); //the server object listens on port 8080
