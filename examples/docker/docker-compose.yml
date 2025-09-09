@@ -2,7 +2,7 @@ services:
   prometheus:
     image: prom/prometheus
     volumes:
-      - "./res/config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml"
+      - "./config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml"
     network_mode: host
     ports:
       - 9090:9090

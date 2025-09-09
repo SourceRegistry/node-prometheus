@@ -16,7 +16,7 @@
     "dist"
   ],
   "scripts": {
-    "example::http.server": "tsx examples/http.server.ts",
+    "example::http.server": "tsx examples/http.server",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "vitest",
