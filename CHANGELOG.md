@@ -1,3 +1,10 @@
+## [1.0.1](https://github.com/SourceRegistry/node-prometheus/compare/v1.0.0...v1.0.1) (2025-09-09)
+
+
+### Bug Fixes
+
+* concat method in README to now include format identifier ([dc040b0](https://github.com/SourceRegistry/node-prometheus/commit/dc040b0de3be422cb0f95b8d428f0343fb02fed2))
+
 # 1.0.0 (2025-09-09)
 
 
