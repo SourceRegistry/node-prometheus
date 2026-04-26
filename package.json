@@ -25,7 +25,8 @@
     "preview": "vite preview",
     "test": "vitest",
     "test:ui": "vitest --ui",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "docs:build": "typedoc --entryPoints src/index.ts --out docs --name \"node-prometheus\" --theme default --excludePrivate --excludeProtected"
   },
   "repository": {
     "type": "git",
@@ -49,23 +50,24 @@
   "bugs": {
     "url": "https://github.com/SourceRegistry/node-prometheus/issues"
   },
-  "homepage": "https://github.com/SourceRegistry/node-prometheus#readme",
+  "homepage": "https://sourceregistry.github.io/node-prometheus",
   "publishConfig": {
     "access": "public"
   },
   "devDependencies": {
+    "@semantic-release/changelog": "^6.0.3",
+    "@semantic-release/commit-analyzer": "^13.0.1",
+    "@semantic-release/git": "^10.0.1",
+    "@semantic-release/npm": "^13.1.5",
+    "@semantic-release/release-notes-generator": "^14.0.3",
     "@types/node": "^25.6.0",
     "@vitest/ui": "^4.1.5",
     "tsx": "^4.21.0",
+    "typedoc": "^0.28.19",
     "typescript": "^6.0.3",
     "vite": "^8.0.10",
     "vite-plugin-dts": "^4.5.4",
-    "vitest": "^4.1.5",
-    "@semantic-release/commit-analyzer": "^13.0.1",
-    "@semantic-release/release-notes-generator": "^14.0.3",
-    "@semantic-release/changelog": "^6.0.3",
-    "@semantic-release/npm": "^13.1.5",
-    "@semantic-release/git": "^10.0.1"
+    "vitest": "^4.1.5"
   },
   "release": {
     "branches": [
