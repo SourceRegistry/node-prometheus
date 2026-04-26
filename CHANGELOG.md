@@ -1,3 +1,13 @@
+# [2.0.0](https://github.com/SourceRegistry/node-prometheus/compare/v1.0.2...v2.0.0) (2026-04-26)
+
+
+* feat!: replace callback summaries with streaming quantiles ([8eade9c](https://github.com/SourceRegistry/node-prometheus/commit/8eade9c6625c83c87ce2b598bed9dd6eee7a42fb))
+
+
+### BREAKING CHANGES
+
+* Summary no longer accepts a calculate callback. Configure quantiles with numeric targets or { quantile, error } entries instead.
+
 ## [1.0.2](https://github.com/SourceRegistry/node-prometheus/compare/v1.0.1...v1.0.2) (2025-09-09)
 
 
