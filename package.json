@@ -2,9 +2,13 @@
   "name": "@sourceregistry/node-prometheus",
   "version": "1.0.2",
   "description": "A lightweight, zero-dependency TypeScript library for creating and exposing Prometheus metrics in standard exposition and OpenMetrics format.",
-  "main": "./dist/index.es.js",
+  "main": "./dist/index.cjs.js",
   "module": "./dist/index.es.js",
   "types": "./dist/index.d.ts",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18"
+  },
   "exports": {
     ".": {
       "import": "./dist/index.es.js",
@@ -50,17 +54,17 @@
     "access": "public"
   },
   "devDependencies": {
-    "@types/node": "^24.3.0",
-    "@vitest/ui": "^3.2.4",
-    "tsx": "^4.20.4",
-    "typescript": "^5.9.2",
-    "vite": "^7.1.3",
+    "@types/node": "^25.6.0",
+    "@vitest/ui": "^4.1.5",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.10",
     "vite-plugin-dts": "^4.5.4",
-    "vitest": "^3.2.4",
+    "vitest": "^4.1.5",
     "@semantic-release/commit-analyzer": "^13.0.1",
     "@semantic-release/release-notes-generator": "^14.0.3",
     "@semantic-release/changelog": "^6.0.3",
-    "@semantic-release/npm": "^12.0.2",
+    "@semantic-release/npm": "^13.1.5",
     "@semantic-release/git": "^10.0.1"
   },
   "release": {

@@ -79,15 +79,15 @@ import { Summary } from '@sourceregistry/node-prometheus';
 const summary = new Summary({
   name: 'request_duration_seconds',
   description: 'Request duration with quantiles',
-  quantiles: [0.5, 0.9, 0.99],
-  calculate: (value, quantile) => {
-    // Example: simple moving average
-    const current = /* your state */ 0;
-    return current * 0.9 + value * 0.1;
-  }
+  quantiles: [
+    { quantile: 0.5, error: 0.05 },
+    { quantile: 0.9, error: 0.01 },
+    { quantile: 0.99, error: 0.001 }
+  ]
 });
 
 summary.observe(1.2);
+summary.observe(0.8);
 ```
 
 ### Untyped

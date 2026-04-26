@@ -14,6 +14,18 @@ const MOCK_NOW = 1712345678901;
 vi.useFakeTimers();
 vi.setSystemTime(MOCK_NOW);
 
+function extractQuantileValue(output: string, metricName: string, quantile: number): number {
+    const match = output.match(
+        new RegExp(`${metricName}\\{[^}]*quantile="${quantile}"[^}]*\\} ([^\\s]+)`)
+    );
+
+    if (!match) {
+        throw new Error(`Quantile ${quantile} not found in output: ${output}`);
+    }
+
+    return Number(match[1]);
+}
+
 describe('Metric Utilities', () => {
     it('cleanText sanitizes names correctly', () => {
         expect(Metric.cleanText('http-requests/total (prod)')).toBe('httprequests_total_prod');
@@ -25,8 +37,23 @@ describe('Metric Utilities', () => {
     it('labelString formats labels correctly', () => {
         expect(Metric.labelString({})).toBe('');
         expect(Metric.labelString({foo: 'bar'})).toBe('{foo="bar"}');
-        expect(Metric.labelString({foo: 'bar', baz: 123})).toBe('{foo="bar",baz="123"}');
+        expect(Metric.labelString({foo: 'bar', baz: 123})).toBe('{baz="123",foo="bar"}');
         expect(Metric.labelString(undefined)).toBe('');
+    });
+
+    it('escapes label values correctly', () => {
+        expect(Metric.labelString({foo: 'bar"\\\n'})).toBe('{foo="bar\\"\\\\\\n"}');
+    });
+
+    it('rejects invalid metric names', () => {
+        expect(() => new Counter({
+            name: '123 bad metric',
+            reader: () => [1],
+        })).toThrow('Invalid metric name');
+    });
+
+    it('rejects invalid label names', () => {
+        expect(() => Metric.labelString({'bad-label': 'x'})).toThrow('Invalid label name');
     });
 
     it('concat combines multiple metrics (prometheus output)', async () => {
@@ -89,7 +116,7 @@ describe('Counter', () => {
         });
 
         const output = await counter.stringify();
-        expect(output).toContain('errors_total{service="api",code="500"} 5 1700000000000');
+        expect(output).toContain('errors_total{code="500",service="api"} 5 1700000000000');
     });
 
     it('handles mixed value formats', async () => {
@@ -108,6 +135,15 @@ describe('Counter', () => {
         expect(output).toContain('mixed_values 20 1600000000000');
         expect(output).toContain('mixed_values{region="us"} 30 ' + MOCK_NOW);
         expect(output).toContain('mixed_values{region="eu"} 40 1500000000000');
+    });
+
+    it('rejects non-finite values', async () => {
+        const counter = new Counter({
+            name: 'bad_value',
+            reader: () => [Infinity],
+        });
+
+        await expect(counter.stringify()).rejects.toThrow('Invalid value');
     });
 
     it('inc() logs warning (no-op)', () => {
@@ -178,6 +214,7 @@ describe('Histogram', () => {
         const hist = new Histogram({
             name: 'latency',
             buckets: [10, 50, 100],
+            labels: {service: 'api'},
         });
 
         hist.observe(30);
@@ -185,12 +222,12 @@ describe('Histogram', () => {
         hist.observe(120);
 
         const output = await hist.stringify();
-        expect(output).toContain('latency_bucket{le="10"} 0');
-        expect(output).toContain('latency_bucket{le="50"} 1'); // 30 <= 50
-        expect(output).toContain('latency_bucket{le="100"} 2'); // 30,80 <= 100
-        expect(output).toContain('latency_bucket{le="+Inf"} 3'); // all
-        expect(output).toContain('latency_sum 230'); // 30+80+120
-        expect(output).toContain('latency_count 3');
+        expect(output).toContain('latency_bucket{le="10",service="api"} 0');
+        expect(output).toContain('latency_bucket{le="50",service="api"} 1'); // 30 <= 50
+        expect(output).toContain('latency_bucket{le="100",service="api"} 2'); // 30,80 <= 100
+        expect(output).toContain('latency_bucket{le="+Inf",service="api"} 3'); // all
+        expect(output).toContain('latency_sum{service="api"} 230'); // 30+80+120
+        expect(output).toContain('latency_count{service="api"} 3');
     });
 
     it('resets all counts', async () => {
@@ -210,37 +247,84 @@ describe('Histogram', () => {
         expect(() => hist.observe(NaN)).toThrow('Invalid histogram value');
         expect(() => hist.observe('string' as any)).toThrow('Invalid histogram value');
     });
+
+    it('rejects invalid bucket definitions', () => {
+        expect(() => new Histogram({name: 'test', buckets: [1, Number.POSITIVE_INFINITY]})).toThrow(
+            'Invalid bucket'
+        );
+    });
 });
 
 describe('Summary', () => {
     it('initializes quantiles', () => {
-        expect(() => new Summary({name: 'test', quantiles: [], calculate: () => 0})).toThrow();
+        expect(() => new Summary({name: 'test', quantiles: []})).toThrow();
     });
 
-    it('observes values and updates quantiles', async () => {
+    it('observes values and estimates targeted quantiles', async () => {
         const summary = new Summary({
             name: 'request_duration',
-            quantiles: [0.5, 0.9],
-            calculate: (value, quantile) => value * quantile, // dummy algorithm
+            labels: {service: 'api'},
+            quantiles: [
+                {quantile: 0.5, error: 0.05},
+                {quantile: 0.9, error: 0.02},
+            ],
         });
 
-        summary.observe(10);
-        summary.observe(20);
+        const values = Array.from({length: 100}, (_, index) => index + 1);
+        const insertionOrder = [...values.slice(50), ...values.slice(0, 50)];
+        insertionOrder.forEach((value) => summary.observe(value));
 
         const output = await summary.stringify();
-        expect(output).toContain('request_duration{quantile="0.5"} 10'); // last value * 0.5 = 10
-        expect(output).toContain('request_duration{quantile="0.9"} 18'); // 20 * 0.9 = 18
-        expect(output).toContain('request_duration_sum 30');
-        expect(output).toContain('request_duration_count 2');
+        const median = extractQuantileValue(output, 'request_duration', 0.5);
+        const p90 = extractQuantileValue(output, 'request_duration', 0.9);
+
+        expect(median).toBeGreaterThanOrEqual(45);
+        expect(median).toBeLessThanOrEqual(55);
+        expect(p90).toBeGreaterThanOrEqual(88);
+        expect(p90).toBeLessThanOrEqual(92);
+        expect(output).toContain('request_duration_sum{service="api"} 5050');
+        expect(output).toContain('request_duration_count{service="api"} 100');
+    });
+
+    it('supports default errors for numeric quantiles', async () => {
+        const summary = new Summary({
+            name: 'latency',
+            quantiles: [0.5],
+            error: 0.1,
+        });
+
+        [1, 2, 3, 4, 5].forEach((value) => summary.observe(value));
+
+        const output = await summary.stringify();
+        const median = extractQuantileValue(output, 'latency', 0.5);
+        expect(median).toBeGreaterThanOrEqual(2);
+        expect(median).toBeLessThanOrEqual(4);
     });
 
     it('throws on invalid value', () => {
         const summary = new Summary({
             name: 'test',
             quantiles: [0.5],
-            calculate: () => 0,
         });
         expect(() => summary.observe(NaN)).toThrow('Invalid summary value');
+    });
+
+    it('rejects invalid quantiles', () => {
+        expect(() =>
+            new Summary({
+                name: 'test',
+                quantiles: [1.5],
+            })
+        ).toThrow('Invalid quantile');
+    });
+
+    it('rejects invalid quantile errors', () => {
+        expect(() =>
+            new Summary({
+                name: 'test',
+                quantiles: [{quantile: 0.5, error: 0}],
+            })
+        ).toThrow('Invalid quantile error');
     });
 });
 
@@ -248,6 +332,7 @@ describe('Untyped', () => {
     it('initializes with default value', async () => {
         const untyped = new Untyped({name: 'unknown'});
         const output = await untyped.stringify();
+        expect(output).toContain('# TYPE unknown untyped');
         expect(output).toContain('unknown 0 ' + MOCK_NOW);
     });
 

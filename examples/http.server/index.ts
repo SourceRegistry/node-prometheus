@@ -2,13 +2,13 @@ import {createServer} from "http";
 import {Counter, Gauge, Histogram, Metric, Untyped} from "../../src"; // !! or import from library if using the npm package `import {Counter, Gauge, Histogram, Metric, Untyped} from "@sourceregistry/node-prometheus";`
 
 const gauge = new Gauge({
-    name: "test 1",
+    name: "test_gauge",
     description: "test of gauge component",
     reader: () => [Math.random()]
 })
 
 const histogram = new Histogram({
-    name: "test 2",
+    name: "test_histogram",
     description: "test of histogram component",
     buckets: [.5, .4, .1, .2]
 })
@@ -16,13 +16,13 @@ const histogram = new Histogram({
 let hits = 0;
 
 const counter = new Counter({
-    name: "test 4", reader: () => [
-        [hits, {method: "GET", action: "Read metrics"}],
+    name: "test_counter", reader: () => [
+        [hits, {method: "GET", action: "read_metrics"}],
     ]
 })
 
 const untyped = new Untyped({
-    name: "test 5",
+    name: "test_untyped",
 })
 
 setInterval(() => {

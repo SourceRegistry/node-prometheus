@@ -8,6 +8,9 @@ export type MetricType = 'counter' | 'gauge' | 'histogram' | 'summary' | 'untype
  */
 export type MaybePromise<T> = Promise<T> | T;
 
+const METRIC_NAME_PATTERN = /^[a-zA-Z_:][a-zA-Z0-9_:]*$/;
+const LABEL_NAME_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+
 /**
  * Input formats accepted by value reader functions.
  */
@@ -21,6 +24,16 @@ type ValueReaderResult =
  * Internal normalized representation of a metric value with labels and timestamp.
  */
 type NormalizedValue = [value: number, labels: Record<string, string>, timestamp: number];
+
+export type SummaryQuantile = {
+    quantile: number;
+    error?: number;
+};
+
+type NormalizedSummaryQuantile = {
+    quantile: number;
+    error: number;
+};
 
 /**
  * Base class for all Prometheus metrics.
@@ -59,8 +72,11 @@ export abstract class Metric<T extends MetricType> {
         labels?: Record<string, string>
     ) {
         this.name = Metric.cleanText(name) || '';
+        if (!this.name) {
+            throw new Error('Metric name is required.');
+        }
         this.description = description;
-        this.labels = labels;
+        this.labels = labels ? Metric.normalizeLabels(labels) : undefined;
     }
 
     /**
@@ -71,8 +87,10 @@ export abstract class Metric<T extends MetricType> {
      */
     static labelString(labels?: Record<string, string | number>): string {
         if (!labels || Object.keys(labels).length === 0) return '';
-        return `{${Object.entries(labels)
-            .map(([key, value]) => `${key}="${String(value)}"`)
+        const normalized = Metric.normalizeLabels(labels);
+        return `{${Object.entries(normalized)
+            .sort(([left], [right]) => left.localeCompare(right))
+            .map(([key, value]) => `${key}="${Metric.escapeLabelValue(value)}"`)
             .join(',')}}`;
     }
 
@@ -86,12 +104,24 @@ export abstract class Metric<T extends MetricType> {
      * @returns The cleaned metric name.
      */
     static cleanText(input?: string): string | undefined {
-        return input
+        const cleaned = input
             ?.replaceAll('-', '')
             .replaceAll('/', '_')
             .replaceAll(' ', '_')
             .replaceAll('(', '')
             .replaceAll(')', '');
+
+        if (cleaned === undefined) {
+            return undefined;
+        }
+
+        if (cleaned !== '' && !METRIC_NAME_PATTERN.test(cleaned)) {
+            throw new Error(
+                `Invalid metric name "${input}". Metric names must match ${METRIC_NAME_PATTERN.source}.`
+            );
+        }
+
+        return cleaned;
     }
 
     /**
@@ -125,12 +155,53 @@ export abstract class Metric<T extends MetricType> {
     protected generateHeader(): string {
         let ret = '';
         if (this.name && this.description) {
-            ret += `# HELP ${this.name} ${this.description}\n`;
+            ret += `# HELP ${this.name} ${Metric.escapeHelpText(this.description)}\n`;
         }
-        if (this.type !== 'untyped') {
-            ret += `# TYPE ${this.name} ${this.type}\n`;
-        }
+        ret += `# TYPE ${this.name} ${this.type}\n`;
         return ret;
+    }
+
+    protected static normalizeNumber(value: number, context: string): number {
+        if (!Number.isFinite(value)) {
+            throw new Error(`Invalid ${context}: ${value}`);
+        }
+        return value;
+    }
+
+    protected static normalizeTimestamp(timestamp: number): number {
+        if (!Number.isFinite(timestamp)) {
+            throw new Error(`Invalid timestamp: ${timestamp}`);
+        }
+        return timestamp;
+    }
+
+    private static escapeHelpText(value: string): string {
+        return value.replaceAll('\\', '\\\\').replaceAll('\n', '\\n');
+    }
+
+    private static escapeLabelValue(value: string): string {
+        return value
+            .replaceAll('\\', '\\\\')
+            .replaceAll('\n', '\\n')
+            .replaceAll('"', '\\"');
+    }
+
+    protected static normalizeLabels(
+        labels: Record<string, string | number>
+    ): Record<string, string> {
+        const normalized: Record<string, string> = {};
+
+        for (const [key, value] of Object.entries(labels)) {
+            if (!LABEL_NAME_PATTERN.test(key)) {
+                throw new Error(
+                    `Invalid label name "${key}". Label names must match ${LABEL_NAME_PATTERN.source}.`
+                );
+            }
+
+            normalized[key] = String(value);
+        }
+
+        return normalized;
     }
 
     /**
@@ -173,16 +244,28 @@ abstract class ValueMetric<T extends 'counter' | 'gauge'> extends Metric<T> {
             const results = await config.reader();
             return results.map((value): NormalizedValue => {
                 if (typeof value === 'number') {
-                    return [value, {}, Date.now()];
+                    return [Metric.normalizeNumber(value, `value for metric "${this.name}"`), {}, Date.now()];
                 } else if (Array.isArray(value)) {
                     if (value.length === 2) {
                         if (typeof value[1] === 'number') {
-                            return [value[0], {}, value[1]];
+                            return [
+                                Metric.normalizeNumber(value[0], `value for metric "${this.name}"`),
+                                {},
+                                Metric.normalizeTimestamp(value[1]),
+                            ];
                         } else {
-                            return [value[0], value[1], Date.now()];
+                            return [
+                                Metric.normalizeNumber(value[0], `value for metric "${this.name}"`),
+                                Metric.normalizeLabels(value[1]),
+                                Date.now(),
+                            ];
                         }
                     } else {
-                        return value as NormalizedValue; // length 3
+                        return [
+                            Metric.normalizeNumber(value[0], `value for metric "${this.name}"`),
+                            Metric.normalizeLabels(value[1]),
+                            Metric.normalizeTimestamp(value[2]),
+                        ];
                     }
                 }
                 throw new Error(`Unexpected value format: ${JSON.stringify(value)}`);
@@ -314,7 +397,9 @@ export class Histogram extends Metric<'histogram'> {
         labels?: Record<string, string>;
     }) {
         super('histogram', config.name, config.description, config.labels);
-        const buckets = (config.buckets ?? []).sort((a, b) => a - b);
+        const buckets = [...new Set(config.buckets ?? [])]
+            .map((bucket) => Metric.normalizeNumber(bucket, `bucket for metric "${this.name}"`))
+            .sort((a, b) => a - b);
         this._buckets = [...buckets, Infinity]; // Always include +Inf
         this.reset(); // Initialize counts
     }
@@ -370,7 +455,7 @@ export class Histogram extends Metric<'histogram'> {
             })
             .join('\n');
 
-        return `${bucketStrings}\n${this.name}_sum ${this._sum}\n${this.name}_count ${this._count}`;
+        return `${bucketStrings}\n${this.name}_sum${Metric.labelString(this.labels)} ${this._sum}\n${this.name}_count${Metric.labelString(this.labels)} ${this._count}`;
     }
 
     /**
@@ -383,22 +468,26 @@ export class Histogram extends Metric<'histogram'> {
 
 /**
  * A Prometheus Summary metric.
- * Tracks φ-quantiles, sum, and count. Quantiles are calculated via user-provided function.
+ * Tracks quantiles, sum, and count using a streaming targeted-quantile sketch.
  *
  * @example
  * const summary = new Summary({
  *   name: "request_duration_seconds",
  *   description: "Request duration in seconds",
- *   quantiles: [0.5, 0.9, 0.99],
- *   calculate: (value, quantile) => value * quantile // dummy algorithm
+ *   quantiles: [
+ *     { quantile: 0.5, error: 0.05 },
+ *     { quantile: 0.9, error: 0.01 },
+ *     { quantile: 0.99, error: 0.001 }
+ *   ]
  * });
  * summary.observe(0.8);
  */
 export class Summary extends Metric<'summary'> {
-    private _quantiles: Map<number, number>; // quantile => estimated value
+    private readonly _targets: readonly NormalizedSummaryQuantile[];
+    private readonly _compressInterval: number;
+    private _samples: Array<{ value: number; g: number; delta: number }> = [];
     private _sum: number = 0;
     private _count: number = 0;
-    private readonly _calculate: (value: number, quantile: number) => number;
 
     /**
      * Creates a new Summary.
@@ -406,22 +495,27 @@ export class Summary extends Metric<'summary'> {
      * @param config - Configuration object.
      * @param config.name - Metric name.
      * @param config.description - Optional description.
-     * @param config.quantiles - Array of φ-quantiles (0 < φ < 1).
-     * @param config.calculate - Function to calculate quantile estimate given value and φ.
+     * @param config.quantiles - Quantiles to estimate, with optional per-quantile error bounds.
+     * @param config.error - Default absolute rank error fraction for number-only quantiles.
+     * @param config.compressInterval - Optional interval controlling compression frequency.
      */
     constructor(config: {
         name: string;
         description?: string;
-        quantiles: readonly number[];
-        calculate: (value: number, quantile: number) => number;
+        quantiles: readonly (number | SummaryQuantile)[];
+        error?: number;
+        compressInterval?: number;
+        labels?: Record<string, string>;
     }) {
-        super('summary', config.name, config.description);
+        super('summary', config.name, config.description, config.labels);
         if (!config.quantiles.length) {
             throw new Error('Summary must have at least one quantile');
         }
-        // Initialize quantiles with 0
-        this._quantiles = new Map(config.quantiles.map((q) => [q, 0]));
-        this._calculate = config.calculate;
+        this._targets = Summary.normalizeTargets(config.quantiles, config.error);
+        this._compressInterval = Summary.normalizeCompressInterval(
+            config.compressInterval,
+            this._targets
+        );
     }
 
     /**
@@ -442,14 +536,17 @@ export class Summary extends Metric<'summary'> {
      * @param value - The observed value.
      */
     push(value: number): void {
-        this._sum += value;
+        const normalizedValue = Metric.normalizeNumber(
+            value,
+            `summary value for metric "${this.name}"`
+        );
+        this._sum += normalizedValue;
         this._count++;
+        this.insertSample(normalizedValue);
 
-        // Update each quantile estimate using the provided algorithm
-        this._quantiles.forEach((_, quantile) => {
-            const newValue = this._calculate(value, quantile);
-            this._quantiles.set(quantile, newValue);
-        });
+        if (this._count % this._compressInterval === 0) {
+            this.compress();
+        }
     }
 
     /**
@@ -458,15 +555,14 @@ export class Summary extends Metric<'summary'> {
      * @returns The serialized string.
      */
     private summaryString(): string {
-        const quantileStrings = [...this._quantiles.entries()]
-            .sort(([a], [b]) => a - b)
+        const quantileStrings = this._targets
             .map(
-                ([q, value]) =>
-                    `${this.name}${Metric.labelString({ ...this.labels, quantile: q })} ${value}`
+                ({ quantile }) =>
+                    `${this.name}${Metric.labelString({ ...this.labels, quantile })} ${this.query(quantile)}`
             )
             .join('\n');
 
-        return `${quantileStrings}\n${this.name}_sum ${this._sum}\n${this.name}_count ${this._count}`;
+        return `${quantileStrings}\n${this.name}_sum${Metric.labelString(this.labels)} ${this._sum}\n${this.name}_count${Metric.labelString(this.labels)} ${this._count}`;
     }
 
     /**
@@ -474,6 +570,148 @@ export class Summary extends Metric<'summary'> {
      */
     async stringify(): Promise<string> {
         return `${super.generateHeader()}${this.summaryString()}\n`;
+    }
+
+    private static normalizeTargets(
+        quantiles: readonly (number | SummaryQuantile)[],
+        defaultError: number | undefined
+    ): readonly NormalizedSummaryQuantile[] {
+        const fallbackError = defaultError ?? 0.01;
+        if (!Number.isFinite(fallbackError) || fallbackError <= 0 || fallbackError >= 1) {
+            throw new Error(`Invalid summary error: ${fallbackError}`);
+        }
+
+        const deduped = new Map<number, number>();
+
+        for (const entry of quantiles) {
+            const target =
+                typeof entry === 'number'
+                    ? { quantile: entry, error: fallbackError }
+                    : { quantile: entry.quantile, error: entry.error ?? fallbackError };
+
+            if (!Number.isFinite(target.quantile) || target.quantile <= 0 || target.quantile >= 1) {
+                throw new Error(`Invalid quantile: ${target.quantile}`);
+            }
+            if (!Number.isFinite(target.error) || target.error <= 0 || target.error >= 1) {
+                throw new Error(`Invalid quantile error for ${target.quantile}: ${target.error}`);
+            }
+
+            const previous = deduped.get(target.quantile);
+            deduped.set(
+                target.quantile,
+                previous === undefined ? target.error : Math.min(previous, target.error)
+            );
+        }
+
+        return [...deduped.entries()]
+            .sort(([left], [right]) => left - right)
+            .map(([quantile, error]) => ({ quantile, error }));
+    }
+
+    private static normalizeCompressInterval(
+        interval: number | undefined,
+        targets: readonly NormalizedSummaryQuantile[]
+    ): number {
+        if (interval !== undefined) {
+            if (!Number.isInteger(interval) || interval <= 0) {
+                throw new Error(`Invalid compress interval: ${interval}`);
+            }
+            return interval;
+        }
+
+        const minError = Math.min(...targets.map((target) => target.error));
+        return Math.max(1, Math.floor(1 / (2 * minError)));
+    }
+
+    private insertSample(value: number): void {
+        if (this._samples.length === 0) {
+            this._samples.push({ value, g: 1, delta: 0 });
+            return;
+        }
+
+        let insertionIndex = 0;
+        let rankBefore = 0;
+
+        while (
+            insertionIndex < this._samples.length &&
+            this._samples[insertionIndex].value <= value
+        ) {
+            rankBefore += this._samples[insertionIndex].g;
+            insertionIndex++;
+        }
+
+        const isBoundary = insertionIndex === 0 || insertionIndex === this._samples.length;
+        const delta = isBoundary
+            ? 0
+            : Math.max(0, Math.floor(this.allowableError(rankBefore, this._count - 1)) - 1);
+
+        this._samples.splice(insertionIndex, 0, { value, g: 1, delta });
+    }
+
+    private compress(): void {
+        if (this._samples.length < 3) {
+            return;
+        }
+
+        const ranks = new Array<number>(this._samples.length);
+        let rank = 0;
+        for (let index = 0; index < this._samples.length; index++) {
+            ranks[index] = rank;
+            rank += this._samples[index].g;
+        }
+
+        for (let index = this._samples.length - 2; index >= 1; index--) {
+            const current = this._samples[index];
+            const next = this._samples[index + 1];
+            const allowed = this.allowableError(ranks[index], this._count);
+
+            if (current.g + next.g + next.delta <= allowed) {
+                next.g += current.g;
+                this._samples.splice(index, 1);
+            }
+        }
+    }
+
+    private allowableError(rank: number, count: number): number {
+        if (count <= 0) {
+            return 1;
+        }
+
+        let allowed = Number.POSITIVE_INFINITY;
+
+        for (const target of this._targets) {
+            const boundary = target.quantile * count;
+            const candidate =
+                rank <= boundary
+                    ? (2 * target.error * (count - rank)) / (1 - target.quantile)
+                    : (2 * target.error * rank) / target.quantile;
+            allowed = Math.min(allowed, Math.floor(candidate));
+        }
+
+        return Math.max(1, allowed);
+    }
+
+    private query(quantile: number): number {
+        if (this._samples.length === 0) {
+            return 0;
+        }
+        if (this._samples.length === 1) {
+            return this._samples[0].value;
+        }
+
+        const desiredRank = quantile * this._count;
+        const threshold = desiredRank + this.allowableError(desiredRank, this._count) / 2;
+        let rank = 0;
+
+        for (let index = 0; index < this._samples.length; index++) {
+            const sample = this._samples[index];
+            if (rank + sample.g + sample.delta > threshold) {
+                return this._samples[Math.max(0, index - 1)].value;
+            }
+            rank += sample.g;
+        }
+
+        return this._samples[this._samples.length - 1].value;
     }
 }
 
@@ -508,8 +746,11 @@ export class Untyped extends Metric<'untyped'> {
     }) {
         super('untyped', config.name, config.description, config.labels);
         this._value = Array.isArray(config.value)
-            ? config.value
-            : [config.value ?? 0, Date.now()];
+            ? [
+                Metric.normalizeNumber(config.value[0], `value for metric "${this.name}"`),
+                Metric.normalizeTimestamp(config.value[1]),
+            ]
+            : [Metric.normalizeNumber(config.value ?? 0, `value for metric "${this.name}"`), Date.now()];
     }
 
     /**
@@ -518,7 +759,12 @@ export class Untyped extends Metric<'untyped'> {
      * @param value - New value or [value, timestamp] tuple.
      */
     set(value: number | [number, number]): void {
-        this._value = Array.isArray(value) ? value : [value, Date.now()];
+        this._value = Array.isArray(value)
+            ? [
+                Metric.normalizeNumber(value[0], `value for metric "${this.name}"`),
+                Metric.normalizeTimestamp(value[1]),
+            ]
+            : [Metric.normalizeNumber(value, `value for metric "${this.name}"`), Date.now()];
     }
 
     /**
