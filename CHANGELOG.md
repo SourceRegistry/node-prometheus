@@ -1,3 +1,10 @@
+## [2.0.1](https://github.com/SourceRegistry/node-prometheus/compare/v2.0.0...v2.0.1) (2026-04-26)
+
+
+### Bug Fixes
+
+* building and publishing of documentation ([bceeb52](https://github.com/SourceRegistry/node-prometheus/commit/bceeb522eef81ed9ee1985b772776053b22df34d))
+
 # [2.0.0](https://github.com/SourceRegistry/node-prometheus/compare/v1.0.2...v2.0.0) (2026-04-26)
 
 
